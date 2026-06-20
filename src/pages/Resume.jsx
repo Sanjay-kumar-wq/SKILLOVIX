@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Upload, FileText, Zap, CheckCircle, XCircle, RotateCcw, Eye, EyeOff } from 'lucide-react';
 import useStore from '../store/useStore';
 import { roadmaps } from '../data/roadmaps';
+import { extractResumeText, detectFileType } from '../utils/resumeParser';
 
 const SKILL_KEYWORDS = {
   'Full Stack Developer': ['html', 'css', 'javascript', 'react', 'node', 'express', 'mongodb', 'sql', 'typescript', 'git', 'rest api', 'docker'],
@@ -37,18 +38,7 @@ function calcAtsScore(text, career) {
   return { total: Math.min(total, 100), checks, keywordScore, foundSkills: found, missingSkills: required.filter((s) => !t.includes(s.toLowerCase())) };
 }
 
-async function parsePdf(file) {
-  // Dynamic import of pdf.js
-  try {
-    const pdfjsLib = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
-    // fallback: just read as text
-  } catch {}
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.readAsText(file);
-  });
-}
+
 
 export default function Resume() {
   const { career } = useStore();
@@ -69,29 +59,15 @@ export default function Resume() {
     setLoading(true);
     setFileName(file.name);
     try {
-      let text = '';
-      if (file.type === 'application/pdf') {
-        // Try to read PDF as text (basic extraction)
-        text = await new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onload = (e) => {
-            // Extract readable text from PDF binary
-            const binary = e.target.result;
-            // Basic text extraction from PDF
-            const matches = binary.match(/\(([^)]+)\)/g) || [];
-            const extracted = matches
-              .map((m) => m.slice(1, -1))
-              .filter((s) => /[a-zA-Z]/.test(s) && s.length > 2)
-              .join(' ');
-            resolve(extracted || binary.replace(/[^\x20-\x7E\n]/g, ' '));
-          };
-          reader.readAsBinaryString(file);
-        });
+      const parsed = await extractResumeText(file);
+      if (parsed.error) {
+        // Show the error message to the user
+        setResumeText('');
+        setResult({ parseError: parsed.message });
       } else {
-        text = await file.text();
+        setResumeText(parsed.text);
+        setResult(calcAtsScore(parsed.text, career));
       }
-      setResumeText(text);
-      setResult(calcAtsScore(text, career));
     } catch {
       setResumeText('');
       setResult(null);
@@ -131,30 +107,30 @@ export default function Resume() {
     borderRadius: '16px',
   };
 
-  const atsLevel = !result
+  const atsLevel = !result || result.parseError
     ? null
     : result.total >= 80
-    ? { label: 'Excellent', color: '#22C55E' }
-    : result.total >= 60
-    ? { label: 'Good', color: '#38BDF8' }
-    : result.total >= 40
-    ? { label: 'Fair', color: '#F59E0B' }
-    : { label: 'Needs Work', color: '#EF4444' };
+      ? { label: 'Excellent', color: '#22C55E' }
+      : result.total >= 60
+        ? { label: 'Good', color: '#38BDF8' }
+        : result.total >= 40
+          ? { label: 'Fair', color: '#F59E0B' }
+          : { label: 'Needs Work', color: '#EF4444' };
 
-  const suggestions = result
+  const suggestions = result && !result.parseError
     ? [
-        !result.checks.hasSummary && 'Skillovix detected no Summary/Objective section — add it! (+10 pts)',
-        !result.checks.hasExperience && 'Skillovix tip: Add an Experience or Internship section. (+15 pts)',
-        !result.checks.hasGithub && 'Skillovix tip: Add your GitHub link to boost ATS score by 5 points.',
-        !result.checks.hasLinkedin && 'Skillovix tip: Add your LinkedIn profile for better recruiter visibility. (+5 pts)',
-        !result.checks.hasProjects && 'Skillovix detected no Projects section — add it! (+15 pts)',
-        result.missingSkills.length > 0 &&
-          `Skillovix recommends: Add these evolved skills to your resume: ${result.missingSkills.slice(0, 4).join(', ')}.`,
-      ].filter(Boolean)
+      !result.checks.hasSummary && 'Skillovix detected no Summary/Objective section — add it! (+10 pts)',
+      !result.checks.hasExperience && 'Skillovix tip: Add an Experience or Internship section. (+15 pts)',
+      !result.checks.hasGithub && 'Skillovix tip: Add your GitHub link to boost ATS score by 5 points.',
+      !result.checks.hasLinkedin && 'Skillovix tip: Add your LinkedIn profile for better recruiter visibility. (+5 pts)',
+      !result.checks.hasProjects && 'Skillovix detected no Projects section — add it! (+15 pts)',
+      result.missingSkills.length > 0 &&
+      `Skillovix recommends: Add these evolved skills to your resume: ${result.missingSkills.slice(0, 4).join(', ')}.`,
+    ].filter(Boolean)
     : [];
 
   const wordCount = resumeText.split(/\s+/).filter(Boolean).length;
-  const density = result
+  const density = result && !result.parseError
     ? Math.round((result.foundSkills.length / Math.max(result.missingSkills.length + result.foundSkills.length, 1)) * 100)
     : 0;
 
@@ -210,12 +186,12 @@ export default function Resume() {
               </div>
               <div className="text-center">
                 <p className="text-white font-semibold text-lg">Drop your resume here or click to upload</p>
-                <p className="text-slate-400 text-sm mt-1">Skillovix supports .txt and .pdf files</p>
+                <p className="text-slate-400 text-sm mt-1">Skillovix supports PDF, DOCX, DOC, TXT, PNG, JPG, JPEG, WEBP</p>
               </div>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".txt,.pdf"
+                accept=".pdf,.docx,.doc,.txt,.png,.jpg,.jpeg,.webp"
                 className="hidden"
                 onChange={handleFileChange}
               />
@@ -250,6 +226,27 @@ export default function Resume() {
               <span className="text-sky-400 font-semibold">Skillovix is analyzing your resume... ⚡</span>
             </div>
           )}
+        </div>
+      ) : result.parseError ? (
+        /* ── Parse Error Banner ─────────────────────────────────────────── */
+        <div className="space-y-4">
+          <div
+            className="flex flex-col items-center gap-4 p-8 rounded-2xl text-center"
+            style={{ background: '#1a0a0a', border: '1px solid #EF444440', borderRadius: '16px' }}
+          >
+            <XCircle size={40} className="text-red-400" />
+            <div>
+              <p className="text-lg font-bold text-red-400 mb-1">Extraction Failed</p>
+              <p className="text-sm text-slate-400">{result.parseError}</p>
+            </div>
+          </div>
+          <button
+            onClick={reset}
+            className="flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-white transition-all hover:scale-105"
+            style={{ background: '#1E3A5F', border: '1px solid #2563EB40' }}
+          >
+            <RotateCcw size={16} /> Try Again
+          </button>
         </div>
       ) : (
         <div className="space-y-6">
